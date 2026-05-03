@@ -10,10 +10,25 @@
 #  TODO maybe u can use split and index 0 instead of startswith 
 
 
+# TODO start_hub should exist also end_hub (use flags)
+
+# TODO find out why the fuck other metadata atribs are accepted (ignored)
+
 # TODO the zone blocked must have max_drones = 0
 
+# TODO there is also the full duplicated connections find something about it 
+
 # TODO there is also the bullshits about writing the comments inside the mandatory attributes
-from pydantic import BaseModel, model_validator, ValidationError, Field, field_validator
+
+# TODO delete the restricted requirement for start/hub
+
+# TODO start_hub and end_hub cannot be isolated
+
+# TODO ensure that there is at least connectivity from start to end (excluding the blocked zones)
+
+# TODO dont forget to turn colors into matplotlib or some shit like that
+
+from pydantic import BaseModel, model_validator, ValidationError, Field, ConfigDict
 from typing import Optional, Literal
 from enum import Enum
 import math
@@ -26,16 +41,20 @@ class State(Enum):
 
 
 ZONE = Literal["normal", "blocked", "restricted", "priority"]
-COLOR = Literal["red", "green", "blue", "yellow"]
+COLOR = Literal["red", "green", "blue", "yellow", "rainbow", "orange",
+                "cyan", "purple", "black", "brown", "maroon", "gold", "silver",
+                "darkred", "violet"]
 
 
 class H_Metadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     zone: ZONE = Field(default="normal")
-    color: Optional[COLOR]
-    max_drones: int = Field(default=-1, ge=0)
+    color: Optional[COLOR] = Field(default=None)
+    max_drones: int = Field(default=-1, ge=1) # TODO find if i ignore this
 
 
-class Hub(BaseModel):
+class Config_Hub(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     x: int
     y: int
@@ -50,9 +69,9 @@ class Hub(BaseModel):
         if self.state == State.START or self.state == State.END:
             if self.metadata.max_drones == -1:
                 self.metadata.max_drones = math.inf
-            if self.metadata.zone in ("blocked", "restricted"):
+            if self.metadata.zone == "blocked":
                 raise ValueError("Start/End Hubs cannot be "
-                                 "blocked/restricted zones")
+                                 "blocked zones")
 
         if self.metadata.zone == "blocked":
             if self.metadata.max_drones != -1:
@@ -63,6 +82,13 @@ class Hub(BaseModel):
             if self.metadata.max_drones == -1:
                 self.metadata.max_drones = 1
         return self
+
+
+class Config_Connection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    hub1: Config_Hub
+    hub2: Config_Hub
+    max_link_capacity: int = Field(default=1, ge=1)
 
 
 class Fly_In_Config:
@@ -92,12 +118,21 @@ class Fly_In_Config:
         try:
             _, nb_drones = src.split()
             self.nb_drones = int(nb_drones)
+            if self.nb_drones <= 0:
+                raise ValueError("nb_drones shouldnt be negative nor 0")
         except Exception:
             raise ValueError("Invalid nb_drones format")
 
-    def validate_metadata(self, metadata: str):
+    def find_hub_by_name(self, name):
+        for hub in self.hubs:
+            if name == hub.name:
+                return hub
+        raise ValueError(f"This {name} doesnt exist")
+
+    def validate_metadata(self, metadata: str, for_hub=True):
         if not metadata:
-            return H_Metadata()
+
+            return H_Metadata() if for_hub else None
 
         metadata = metadata.strip()
         config = {}
@@ -119,7 +154,7 @@ class Fly_In_Config:
             config[key] = value
 
         try:
-            return H_Metadata(**config)
+            return H_Metadata(**config) if for_hub else config
         except ValidationError as e:
             raise ValueError(f"Invalid metadata values: {e}")
 
@@ -141,7 +176,7 @@ class Fly_In_Config:
         metadata = self.validate_metadata(metadata)
 
         try:
-            hub = Hub(
+            hub = Config_Hub(
                 name=name,
                 x=x,
                 y=y,
@@ -175,14 +210,60 @@ class Fly_In_Config:
             self.end_hub = hub
 
         self.hubs.append(hub)
+
+    def validate_connections(self, conn_hubs, metadata):
+        z1, z2 = conn_hubs
+
+        hub_names = [hub.name for hub in self.hubs]
+
+        if z1 not in hub_names:
+            raise ValueError(f"this hub {z1} doesnt exist!!")
+        if z2 not in hub_names:
+            raise ValueError(f"this hub {z2} doesnt exist!!")
+
+        if z1 == z2:
+            raise ValueError(f"this hub {z1} cannot establish a connection with itself !")
+        conns = [(c.hub1.name, c.hub2.name) for c in self.connections]
+
+        if (z1, z2) in conns or (z2, z1) in conns:
+            raise ValueError(f"The connection ({z1}-{z2}) is already etablished")
+
+        z1 = self.find_hub_by_name(z1)
+        z2 = self.find_hub_by_name(z2)
+
+        metadata = self.validate_metadata(metadata, for_hub=False)
+        res = {}
+        if metadata:
+            res = {
+                "hub1": z1,
+                "hub2": z2,
+                **metadata
+            }
+        else:
+            res = {
+                "hub1": z1,
+                "hub2": z2,
+            }
+        try:
+            connection = Config_Connection(**res)
+        except ValidationError as e:
+            raise ValueError(f"Invalid connection: {e}")
+        return connection
+
     def process_connections(self, src: str):
         try:
             _, connection = src.split(maxsplit=1)
-            z1, z2 = connection.split("-")
+            if len(connection.split()) == 1:
+                z1, z2 = connection.split("-")
+                metadata = None
+            else:
+                conn_hubs, metadata = connection.split()
+                z1, z2 = conn_hubs.split("-")
+                
         except ValueError:
             raise ValueError("Invalid connection format")
-
-        self.connections.append((z1, z2))
+        conn = self.validate_connections((z1, z2), metadata)
+        self.connections.append(conn)
 
     def validate_all_hubs(self):
         set_names = set()
@@ -202,6 +283,37 @@ class Fly_In_Config:
             if (max_drones < self.nb_drones and state in (State.START, State.END)):
                 raise ValueError("Start or end hubs cannot have less"
                                  " max_drones than number of drones")
+
+    def validate_parse_state(self):
+        if self.nb_drones < 0:
+            raise ValueError("The file is empty")
+
+        if not self.start_hub or not self.end_hub:
+            raise ValueError("The file should contain start_hub and end_hub")
+
+    def validate_connectivity(self):
+        hubs = {hub.name for hub in self.hubs}
+        frontier = {self.start_hub.name}
+        edges = set()
+
+        while frontier:
+            curr = frontier.pop()
+            edges.add(curr)
+            for conn in self.connections:
+                if conn.hub1.name == curr and conn.hub2.name not in edges:
+                    frontier.add(conn.hub2.name)
+                if conn.hub2.name == curr and conn.hub1.name not in edges:
+                    frontier.add(conn.hub1.name)
+
+        if self.end_hub.name not in edges:
+            raise ValueError(
+                f"No path from '{self.start_hub.name}' to '{self.end_hub.name}'. "
+                f"Reachable hubs: {edges}"
+            )
+
+        diff = hubs.difference(edges)
+        if diff:
+            print(f"Warning these hubs are isolated {diff} !!!")
 
     def parse(self):
         with open(self.filepath, "r") as file:
@@ -233,7 +345,9 @@ class Fly_In_Config:
                 else:
                     raise ValueError(f"Line {line_num}: Unknown attribute")
 
+        self.validate_parse_state()
         self.validate_all_hubs()
+        self.validate_connectivity()
 
     def to_dict(self):
         return {
@@ -262,9 +376,17 @@ class Fly_In_Config:
 
         print(f"\nConnections ({len(data['connections'])}):")
         for c in data["connections"]:
-            print(f"  - {c[0]} -> {c[1]}")
+            print(f"  - {c.hub1.name} -> {c.hub2.name} [max_link_capacity={c.max_link_capacity}]")
+
+    def deploy(self):
+        return {
+            "nb_drones": self.nb_drones,
+            "hubs": self.hubs,
+            "connections": self.connections,
+        }
 
 
-config = Fly_In_Config("01_linear_path.txt")
-config.parse()
-config.summary()
+if __name__ == "__main__":
+    config = Fly_In_Config("01_linear_path.txt")
+    config.parse()
+    config.summary()
