@@ -28,6 +28,11 @@
 
 # TODO dont forget to turn colors into matplotlib or some shit like that
 
+
+
+# TODO WARNING maybe they are not sequential load everything at once 
+# TODO keyboard BS
+
 from pydantic import BaseModel, model_validator, ValidationError, Field, ConfigDict
 from typing import Optional, Literal
 from enum import Enum
@@ -43,7 +48,7 @@ class State(Enum):
 ZONE = Literal["normal", "blocked", "restricted", "priority"]
 COLOR = Literal["red", "green", "blue", "yellow", "rainbow", "orange",
                 "cyan", "purple", "black", "brown", "maroon", "gold", "silver",
-                "darkred", "violet"]
+                "darkred", "violet", "lime", "magenta"]
 
 
 class H_Metadata(BaseModel):
