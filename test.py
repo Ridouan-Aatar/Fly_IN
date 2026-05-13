@@ -1,10 +1,12 @@
 from main import Fly_In_Config, Config_Hub, Config_Connection, State
 import heapq
 
-class Drone:
+
+class Drone():
     _id_counter = 0  # class-level counter (your version mutates shared state oddly)
 
     def __init__(self, start_hub: Config_Hub, end_hub: Config_Hub, path: list) -> None:
+
         Drone._id_counter += 1
         self.id: int = Drone._id_counter
         self.curr_hub: Config_Hub = start_hub
@@ -22,8 +24,12 @@ class Drone:
         self.delivered = self.path[self.steps - 1] == self.end_hub.name
 
 
+
     def __repr__(self) -> str: # TODO i might not need to do this
         return f"D{self.id}@{self.curr_hub.name}"
+
+
+
 
 
 class Graph:
@@ -36,14 +42,18 @@ class Graph:
         # self.curr_drones_hubs = {hub.name: 0 for hub in self.config.hubs}
         self.connections = self.config.connections
         self.adjacency = self.connection_to_adjacency()
-        self.paths = self.paths = sorted(self.get_k_paths(2), key=len) # TODO this is hardcoded K
+        self.paths = sorted(self.get_k_paths(4), key=self.path_cost)[:1] # TODO this is hardcoded K
         for path in self.paths:
             print(len(path))
         self.drones: list[Drone] = [
             Drone(config.start_hub, config.end_hub, self.paths[0])
             for _ in range(config.nb_drones)
         ]
-
+    def path_cost(self, path: list[str]) -> int:
+        return sum(
+            2 if self.hubs[h].metadata.zone == "restricted" else 1
+            for h in path[1:]  # skip start hub
+        )
     def connection_to_adjacency(self):
         res = {}
         for hub in self.config.hubs:
@@ -150,24 +160,42 @@ class Fly_In:
     def change_path(self, id):
         drone = self.drones[id]
         old_path = drone.path
-        step = drone.steps - 1
-
-        print(old_path, step)
+        step = drone.steps
+        old_hub_name = old_path[step - 1]
 
         for path in self.paths:
-            if old_path != path:
-                if old_path[step] in path:
-                    print("path changed !!!!!!!")
-                    
-                    self.drones[id].path = path
-                    drone.steps = path.index(old_path[step])
-                    print(path, drone.steps)
+            if drone.path != path:
+                if old_hub_name in path:
+                    step = path.index(old_hub_name)
+                    drone.steps = step + 1
+                    drone.path = path
                     return True
+
         return False
 
     # def check_num_connectivity(self, id):
 
-    def modify_connectivity(self, id):
+    def add_connection(self, id):
+        drone = self.drones[id]
+        step = drone.steps
+        old_hub_name = drone.path[step - 1]
+        new_hub_name = drone.path[step]
+        key = tuple(sorted((old_hub_name, new_hub_name)))
+        # print(f"D{id + 1} add connection {key}")
+        self.conn_occupancy[key] += 1
+    
+    def release_connection(self, id):
+        drone = self.drones[id]
+        step = drone.steps
+        old_hub_name = drone.path[step - 1]
+        new_hub_name = drone.path[step]
+        key = tuple(sorted((old_hub_name, new_hub_name)))
+        # print(f"D{id + 1} release connection {key}")
+        self.conn_occupancy[key] -= 1
+        if self.conn_occupancy[key] < 0:
+            raise ValueError("conn_occupancy reaches negativity")
+
+    def modify_connectivity(self, id, mode: bool = True):
         hubs = self.graph.hubs
         drone = self.drones[id]
         step = drone.steps
@@ -175,8 +203,9 @@ class Fly_In:
         old_hub_name = drone.path[step - 1]
         new_hub_name = drone.path[step]
 
-        key = tuple(sorted((old_hub_name, new_hub_name)))
-        self.conn_occupancy[key] += 1 if new_hub_name != self.graph.end_hub.name else 0
+        if mode:
+            key = tuple(sorted((old_hub_name, new_hub_name)))
+            self.conn_occupancy[key] += 1 if new_hub_name != self.graph.end_hub.name else 0
         
         if oldest_hub_name:
             key = tuple(sorted((old_hub_name, oldest_hub_name)))
@@ -200,37 +229,32 @@ class Fly_In:
         hard_conn_capacity = self.graph.adjacency[old_hub_name][new_hub_name] # maybe i should do the same as above
 
         # print(conn_capacity, hard_conn_capacity)
+
+
         if not drone.isstandby:
-            
+            # print(id,"hello")
             if conn_capacity >= hard_conn_capacity:
                 return False
-            
+            # print(id,"helloXXXXXX")
+            # print(id,"hello")
             # if hubs[new_hub_name].metadata.zone == "restricted":
             #     # print("i can go")
             #     return True
 
-            # print(self.curr_num_drones[new_hub_name]>=hubs[new_hub_name].metadata.max_drones )
+            # print(id, self.curr_num_drones[new_hub_name],hubs[new_hub_name].metadata.max_drones )
             if self.curr_num_drones[new_hub_name] >= hubs[new_hub_name].metadata.max_drones:
-                return False
+                return hubs[new_hub_name].metadata.zone == "restricted"
 
         return True
 
-    def check_restriction(self, id):
+    def give_turns(self, id):
         hubs = self.graph.hubs
         drone = self.drones[id]
         step = drone.steps
-        old_hub_name = drone.path[step - 1]
         new_hub_name = drone.path[step]
 
-        if hubs[new_hub_name].metadata.zone == "restricted" and not drone.isstandby:
-            drone.isstandby = True
-            return True
-        elif hubs[new_hub_name].metadata.zone == "restricted" and drone.isstandby:
-            drone.isstandby = False
-            return False
-
-        drone.isstandby = False
-        return False
+        if drone.turn_allowed == 0:
+            drone.turn_allowed = (2 if hubs[new_hub_name].metadata.zone == "restricted" else 1)
 
     def traverse(self, id):
         hubs = self.graph.hubs
@@ -239,14 +263,25 @@ class Fly_In:
         old_hub_name = drone.path[step - 1]
         new_hub_name = drone.path[step]
 
-        if not drone.isstandby:
+        self.give_turns(id)
+
+        if drone.turn_allowed > 0 and not drone.isstandby:
             self.curr_num_drones[old_hub_name] -= 1
+            self.add_connection(id)
+            drone.isstandby = drone.turn_allowed == 2
+        
+        drone.turn_allowed -= 1
+        
+        if drone.turn_allowed == 0:
+
             self.curr_num_drones[new_hub_name] += 1
-            self.modify_connectivity(id)
+            # self.modify_connectivity(id)
+            self.release_connection(id)
 
-        self.check_restriction(id)
+            drone.isstandby = False
 
-        if drone.isstandby:
+        
+        if drone.turn_allowed:
             return (f"D{id+1}-{old_hub_name}-{new_hub_name}")
         else:
             drone.steps += 1
@@ -268,9 +303,14 @@ class Fly_In:
                 if drone.delivered:
                     continue
                 if not self.check_availability(i):
-                    # print(f"D{i} not moving yet")
-                    # if not self.change_path(i):
-                    continue
+                    # print(f"D{i+ 1} not moving yet")
+                    # continue
+                    if not self.change_path(i):
+                        continue
+                    else:
+                        if not self.check_availability(i):
+                            continue
+                    
                 
                 # if :
                 #     print("there is restrictions")
@@ -285,7 +325,6 @@ class Fly_In:
                 
             print(f"Turn {turn}: {" ".join(d_paths)}")
 
-            # break
             # print([drone.delivered for drone in self.drones[:2]])
             # print(self.drones[1].path[self.drones[1].steps])
             # print(self.curr_num_drones)
@@ -296,9 +335,10 @@ class Fly_In:
             #     pass
 
 
-
+import sys
 if __name__ == "__main__":
-    config = Fly_In_Config("maps/medium/02_circular_loop.txt")
+
+    config = Fly_In_Config(sys.argv[1])
     config.parse()
 
     graph = Graph(config)
@@ -306,8 +346,8 @@ if __name__ == "__main__":
     # path = graph.dijkstra()
 
     # print(" -> ".join(path))    
-    # for path in graph.paths:
-    #     print(f"{path} ====> {len(path)}")
+    for path in graph.paths:
+        print(f"{path} ====> {len(path)}")
 
     fly = Fly_In(graph)
     # print(fly.all_delivered())
