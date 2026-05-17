@@ -38,12 +38,8 @@ class Graph:
     def __init__(self, config: Fly_In_Config) -> None:
         self.config = config
 
-        # fix: assert to narrow Config_Hub | None → Config_Hub
-        assert config.start_hub is not None
-        assert config.end_hub is not None
-
-        self.start_hub: Config_Hub = config.start_hub
-        self.end_hub: Config_Hub = config.end_hub
+        self.start_hub = config.start_hub
+        self.end_hub = config.end_hub
 
         self.hubs = config.hubs
         self.connections = config.connections
@@ -57,8 +53,8 @@ class Graph:
 
         self.drones: list[Drone] = [
             Drone(
-                self.start_hub,
-                self.end_hub,
+                config.start_hub,
+                config.end_hub,
                 self.paths[0],
             )
             for _ in range(config.nb_drones)
@@ -112,23 +108,33 @@ class Graph:
         penalty_nodes = penalty_nodes or {}
         penalty_edges = penalty_edges or {}
 
-        start = self.start_hub.name
-        end = self.end_hub.name
+        start = self.config.start_hub.name
+        end = self.config.end_hub.name
 
-        cost_so_far: dict[str, float] = {start: 0}
-        came_from: dict[str, str | None] = {start: None}
-        heap: list[tuple[float, str]] = [(0, start)]
+        cost_so_far: dict[str, float] = {
+            start: 0,
+        }
+
+        came_from: dict[str, str | None] = {
+            start: None,
+        }
+
+        heap: list[tuple[float, str]] = [
+            (0, start),
+        ]
 
         while heap:
 
             current_cost, current = heapq.heappop(heap)
 
             if current == end:
+
                 path: list[str] = []
-                current_node: str | None = current
-                while current_node is not None:
-                    path.append(current_node)
-                    current_node = came_from.get(current_node, None)
+
+                while current is not None:
+                    path.append(current)
+                    current = came_from[current]
+
                 return list(reversed(path))
 
             if current_cost > cost_so_far[current]:
@@ -139,18 +145,16 @@ class Graph:
                 neighbor = self.hubs[neighbor_name]
 
                 if neighbor.metadata.zone == "restricted":
-                    base_cost: float = 2.0
+                    base_cost = 2
                 elif neighbor.metadata.zone == "priority":
                     base_cost = 0.5
                 else:
-                    base_cost = 1.0
+                    base_cost = 1
 
                 node_penalty = penalty_nodes.get(neighbor_name, 0)
 
-                # fix: cast to tuple[str, str] explicitly
-                edge_key: tuple[str, str] = (
-                    min(current, neighbor_name),
-                    max(current, neighbor_name),
+                edge_key = tuple(
+                    sorted((current, neighbor_name))
                 )
 
                 edge_penalty = penalty_edges.get(edge_key, 0)
@@ -164,7 +168,9 @@ class Graph:
 
                 if new_cost < cost_so_far.get(neighbor_name, float("inf")):
                     cost_so_far[neighbor_name] = new_cost
+
                     came_from[neighbor_name] = current
+
                     heapq.heappush(heap, (new_cost, neighbor_name))
 
         return None
@@ -173,13 +179,15 @@ class Graph:
         penalty_nodes: dict[str, float] = {}
 
         retries = 0
-        min_cost: float = -1.0
+        min_cost = -1
 
         paths: list[list[str]] = []
 
         while retries < k:
 
-            path = self.dijkstra(penalty_nodes=penalty_nodes)
+            path = self.dijkstra(
+                penalty_nodes=penalty_nodes,
+            )
 
             if path is None:
                 break
@@ -187,7 +195,7 @@ class Graph:
             if path not in paths:
 
                 if not paths:
-                    min_cost = float(self.path_cost(path))
+                    min_cost = self.path_cost(path)
 
                 if abs(self.path_cost(path) - min_cost) < 5:
                     paths.append(path)
@@ -214,17 +222,13 @@ class Fly_In:
             key=lambda drone: drone.id,
         )
 
-        self.curr_num_drones: dict[str, int] = {
+        self.curr_num_drones = {
             hub.name: 0
             for hub in graph.hubs.values()
         }
 
-        # fix: explicit tuple[str, str] key type
-        self.conn_occupancy: dict[tuple[str, str], int] = {
-            (
-                min(conn.hub1.name, conn.hub2.name),
-                max(conn.hub1.name, conn.hub2.name),
-            ): 0
+        self.conn_occupancy = {
+            tuple(sorted((conn.hub1.name, conn.hub2.name))): 0
             for conn in graph.connections
         }
 
@@ -233,7 +237,10 @@ class Fly_In:
         self.paths = graph.paths
 
     def all_delivered(self) -> bool:
-        return all(drone.delivered for drone in self.drones)
+        return all(
+            drone.delivered
+            for drone in self.drones
+        )
 
     def change_path(self, drone_id: int) -> bool:
         drone = self.drones[drone_id]
@@ -242,52 +249,71 @@ class Fly_In:
 
         for path in self.paths:
 
-            if drone.path != path and current_hub in path:
-                drone.steps = path.index(current_hub) + 1
+            if (drone.path != path and current_hub in path):
+
+                drone.steps = (path.index(current_hub) + 1)
                 drone.path = path
+
                 return True
 
         return False
 
-    def _make_key(self, a: str, b: str) -> tuple[str, str]:
-        return (min(a, b), max(a, b))
-
     def add_connection(self, drone_id: int) -> None:
         drone = self.drones[drone_id]
 
-        key = self._make_key(
-            drone.path[drone.steps - 1],
-            drone.path[drone.steps],
+        key = tuple(
+            sorted(
+                (drone.path[drone.steps - 1], drone.path[drone.steps])
+            )
         )
 
         self.conn_occupancy[key] += 1
 
-    def release_old_connection(self, drone_id: int) -> None:
+    def release_old_connection(
+        self,
+        drone_id: int,
+    ) -> None:
+
         drone = self.drones[drone_id]
 
         if drone.prev_hub is None:
             return
 
         current_hub = drone.path[drone.steps - 1]
-        key = self._make_key(drone.prev_hub, current_hub)
+
+        key = tuple(
+            sorted(
+                (drone.prev_hub, current_hub)
+            )
+        )
 
         self.conn_occupancy[key] -= 1
 
         if self.conn_occupancy[key] < 0:
-            raise ValueError(f"Negative occupancy for {key}")
+            raise ValueError(
+                f"Negative occupancy for {key}"
+            )
 
-    def check_availability(self, drone_id: int) -> bool:
+    def check_availability(
+        self,
+        drone_id: int,
+    ) -> bool:
+
         drone = self.drones[drone_id]
 
         old_hub = drone.path[drone.steps - 1]
         new_hub = drone.path[drone.steps]
 
-        key = self._make_key(old_hub, new_hub)
+        key = tuple(
+            sorted((old_hub, new_hub))
+        )
 
         occupancy = self.conn_occupancy.get(key)
 
         if occupancy is None:
-            raise KeyError(f"Connection {key} does not exist")
+            raise KeyError(
+                f"Connection {key} does not exist"
+            )
 
         max_capacity = self.graph.adjacency[old_hub][new_hub]
 
@@ -298,7 +324,9 @@ class Fly_In:
 
             if (
                 self.curr_num_drones[new_hub]
-                >= self.graph.hubs[new_hub].metadata.max_drones
+                >= self.graph.hubs[
+                    new_hub
+                ].metadata.max_drones
             ):
                 return (
                     self.graph.hubs[new_hub].metadata.zone == "restricted"
@@ -312,9 +340,16 @@ class Fly_In:
         new_hub = drone.path[drone.steps]
 
         if drone.turn_allowed == 0:
+
             zone = self.graph.hubs[new_hub].metadata.zone
-            drone.turn_allowed = 2 if zone == "restricted" else 1
-            self.release_old_connection(drone_id)
+
+            drone.turn_allowed = (
+                2 if zone == "restricted" else 1
+            )
+
+            self.release_old_connection(
+                drone_id
+            )
 
     def traverse(self, drone_id: int) -> str:
         drone = self.drones[drone_id]
@@ -324,10 +359,17 @@ class Fly_In:
 
         self.give_turns(drone_id)
 
-        if drone.turn_allowed > 0 and not drone.is_standby:
+        if (
+            drone.turn_allowed > 0
+            and not drone.is_standby
+        ):
             self.curr_num_drones[old_hub] -= 1
+
             self.add_connection(drone_id)
-            drone.is_standby = drone.turn_allowed == 2
+
+            drone.is_standby = (
+                drone.turn_allowed == 2
+            )
 
         drone.turn_allowed -= 1
 
@@ -345,7 +387,10 @@ class Fly_In:
         drone.prev_hub = old_hub
         drone.steps += 1
 
-        return f"D{drone_id + 1}-{self.paint(new_hub)}"
+        return (
+            f"D{drone_id + 1}-"
+            f"{self.paint(new_hub)}"
+        )
 
     def simulate(self) -> None:
         turn = 0
@@ -362,13 +407,14 @@ class Fly_In:
                     continue
 
                 if not self.check_availability(index):
-                    if (
-                        not self.change_path(index)
-                        or not self.check_availability(index)
-                    ):
+                    if (not self.change_path(index) or
+                       not self.check_availability(index)):
                         continue
 
                 drone_paths.append(self.traverse(index))
                 drone.check_deliverance()
 
-            print(f"Turn {turn}: {' '.join(drone_paths)}")
+            print(
+                f"Turn {turn}: "
+                f"{' '.join(drone_paths)}"
+            )
