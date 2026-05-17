@@ -238,6 +238,9 @@ class Fly_In:
     def change_path(self, drone_id: int) -> bool:
         drone = self.drones[drone_id]
 
+        old_path = drone.path
+        old_step = drone.steps
+
         current_hub = drone.path[drone.steps - 1]
 
         for path in self.paths:
@@ -245,8 +248,12 @@ class Fly_In:
             if drone.path != path and current_hub in path:
                 drone.steps = path.index(current_hub) + 1
                 drone.path = path
-                return True
+                if self.check_availability(drone_id):
+                    return True
+                drone.path = old_path
 
+        drone.path = old_path
+        drone.steps = old_step
         return False
 
     def _make_key(self, a: str, b: str) -> tuple[str, str]:
@@ -278,7 +285,7 @@ class Fly_In:
 
     def check_availability(self, drone_id: int) -> bool:
         drone = self.drones[drone_id]
-
+        # print(f"D{drone_id} {drone.steps - 1} {drone.path}")
         old_hub = drone.path[drone.steps - 1]
         new_hub = drone.path[drone.steps]
 
@@ -364,9 +371,11 @@ class Fly_In:
                 if not self.check_availability(index):
                     if (
                         not self.change_path(index)
-                        or not self.check_availability(index)
+                        # or not self.check_availability(index)
                     ):
+                        # print(f"D{index + 1} not yet")
                         continue
+                    # print(f"D{index + 1} changed path")
 
                 drone_paths.append(self.traverse(index))
                 drone.check_deliverance()
