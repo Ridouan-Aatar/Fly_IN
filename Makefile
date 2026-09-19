@@ -1,6 +1,7 @@
 UV = python3 -m uv
 PYTHON = $(UV) run python3
 
+CACHE_DIR = .uv_cache
 VENV = .venv
 MAP ?= maps/easy/01_linear_path.txt
 
@@ -11,7 +12,7 @@ run:
 
 install:
 	pip install uv --quiet
-	$(UV) sync
+	$(UV) sync --cache-dir $(CACHE_DIR)
 
 
 debug:
@@ -23,6 +24,7 @@ clean:
 	find . -name "*.pyc" -delete
 
 fclean: clean
+	rm -rf $(CACHE_DIR)
 	rm -rf $(VENV)
 
 lint:

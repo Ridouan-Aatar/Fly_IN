@@ -1,0 +1,8 @@
+maps
+__pycache__
+.mypy_cache
+.uv_cache
+.venv
+fly_in_test.py
+map.txt
+parser_test.py
